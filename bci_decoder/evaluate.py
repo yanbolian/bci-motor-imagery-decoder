@@ -30,7 +30,10 @@ from scipy import signal as sp_signal
 from scipy.stats import linregress
 from typing import Dict, Optional
 
-CLASS_NAMES = ["Rest", "Left hand", "Right hand"]
+CLASS_NAMES   = ["Rest", "Left hand", "Right hand"]
+CLASS_NAMES_4 = ["Rest", "Left hand", "Right hand", "Feet"]
+# Colour palette shared by all plots — up to 4 classes supported.
+_COLORS = ["steelblue", "darkorange", "green", "purple"]
 
 
 # -- Metrics -------------------------------------------------------------------
@@ -77,12 +80,13 @@ def print_report(
     y_pred: np.ndarray,
     model_name: str = "",
     trial_duration_sec: float = 4.0,
+    n_classes: int = 3,
 ) -> None:
     """Print accuracy, balanced accuracy, and ITR."""
     acc     = accuracy_score(y_true, y_pred)
     bal_acc = balanced_accuracy_score(y_true, y_pred)
     dpm     = 60.0 / trial_duration_sec      # decisions per minute
-    itr     = information_transfer_rate(acc, n_classes=3, decisions_per_min=dpm)
+    itr     = information_transfer_rate(acc, n_classes=n_classes, decisions_per_min=dpm)
 
     header = f"  [{model_name}]" if model_name else "  [Results]"
     print(f"\n{header}")
@@ -98,14 +102,18 @@ def plot_confusion_matrix(
     y_pred: np.ndarray,
     model_name: str = "",
     save_path: Optional[str] = None,
+    class_names: Optional[list] = None,
 ) -> None:
     """Normalised confusion matrix heatmap."""
+    if class_names is None:
+        class_names = CLASS_NAMES
     cm = confusion_matrix(y_true, y_pred, normalize="true")
-    fig, ax = plt.subplots(figsize=(5, 4))
+    n  = len(class_names)
+    fig, ax = plt.subplots(figsize=(4 + n * 0.5, 3 + n * 0.5))
     sns.heatmap(
         cm, annot=True, fmt=".2f", cmap="Blues",
-        xticklabels=CLASS_NAMES,
-        yticklabels=CLASS_NAMES,
+        xticklabels=class_names,
+        yticklabels=class_names,
         vmin=0, vmax=1, ax=ax,
     )
     ax.set_xlabel("Predicted label")
@@ -122,8 +130,10 @@ def plot_training_curves(
     train_losses: list,
     val_accuracies: list,
     save_path: Optional[str] = None,
+    n_classes: int = 3,
 ) -> None:
     """EEGNet training loss + validation accuracy over epochs."""
+    chance = 1.0 / n_classes
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
     axes[0].plot(train_losses, color="steelblue", lw=1.5)
@@ -132,7 +142,8 @@ def plot_training_curves(
     axes[0].set_title("Training loss")
 
     axes[1].plot(val_accuracies, color="darkorange", lw=1.5)
-    axes[1].axhline(1 / 3, ls="--", color="grey", label="Chance (33.3 %)")
+    axes[1].axhline(chance, ls="--", color="grey",
+                    label=f"Chance ({chance:.1%})")
     axes[1].set_ylim(0, 1)
     axes[1].set_xlabel("Epoch")
     axes[1].set_ylabel("Accuracy")
@@ -152,6 +163,7 @@ def plot_band_power_spectrum(
     y: np.ndarray,
     sfreq: int = 250,
     save_path: Optional[str] = None,
+    class_names: Optional[list] = None,
 ) -> None:
     """
     Mean PSD per class and hemisphere, highlighting mu/beta ERD.
@@ -160,10 +172,13 @@ def plot_band_power_spectrum(
     data, the mu (8-12 Hz) and beta (13-30 Hz) bands should show clearly
     lower power for the motor imagery classes compared to rest —
     and the suppression should be lateralised (contralateral hemisphere).
+    For 4-class data, the feet class shows a vertex ERD (strongest at Cz)
+    rather than a lateral ERD.
     """
+    if class_names is None:
+        class_names = CLASS_NAMES
     n_channels = X.shape[1]
     half = n_channels // 2
-    colors = {"Rest": "steelblue", "Left hand": "darkorange", "Right hand": "green"}
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=True)
     for ax_idx, (ch_slice, hemisphere) in enumerate([
@@ -171,11 +186,11 @@ def plot_band_power_spectrum(
         (slice(half, None), "Right hemisphere (ch 4–7)"),
     ]):
         ax = axes[ax_idx]
-        for cls, name in enumerate(CLASS_NAMES):
+        for cls, name in enumerate(class_names):
             subset = X[y == cls][:, ch_slice, :]
             freqs, psd = sp_signal.welch(subset, fs=sfreq, nperseg=128, axis=-1)
             mean_psd = psd.mean(axis=(0, 1))
-            ax.semilogy(freqs, mean_psd, color=list(colors.values())[cls],
+            ax.semilogy(freqs, mean_psd, color=_COLORS[cls],
                         label=name, lw=1.8)
 
         ax.axvspan(8,  12, alpha=0.12, color="purple", label="mu (8-12 Hz)")
@@ -485,6 +500,190 @@ def plot_behavioral_correlation(
         f"Pearson r={r:.3f}, {p_str}  —  higher ITR → more actions/min"
     )
     ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"    Saved -> {save_path}")
+    plt.close(fig)
+
+
+def plot_raw_signal_example(
+    X: np.ndarray,
+    y: np.ndarray,
+    sfreq: int = 250,
+    save_path: Optional[str] = None,
+    class_names: Optional[list] = None,
+) -> None:
+    """
+    Grid of raw neural time series: rows = 4 representative channels,
+    columns = one per class.
+
+    Layout
+    ------
+    Each panel overlays 3 individual trials (faint) plus the class-mean
+    waveform (bold).  This makes two things visible simultaneously:
+      1. Trial-to-trial variability (the faint lines spread).
+      2. The systematic ERD signal that survives averaging (the bold line).
+
+    Reading the plot
+    ----------------
+    The ERD appears as *suppressed oscillatory amplitude* in the contralateral
+    hemisphere relative to rest.  Because the simulation adds mu (10 Hz) and
+    beta (20 Hz) oscillations, the time series looks like a noisy sinusoid.
+    During imagery, the amplitude of that sinusoid shrinks in the relevant
+    hemisphere:
+
+      Left-hand imagery  → channels 4-5 (right cortex) show less oscillation
+      Right-hand imagery → channels 0-1 (left cortex) show less oscillation
+      Rest               → both hemispheres oscillate at full amplitude
+
+    Channel layout (simulated data)
+    --------------------------------
+    Channels 0-3 = left sensorimotor cortex  (contralateral to right hand)
+    Channels 4-7 = right sensorimotor cortex (contralateral to left hand)
+
+    Parameters
+    ----------
+    X : ndarray, shape (n_trials, n_channels, n_samples)
+        Raw (or minimally preprocessed) neural data.
+    y : ndarray, shape (n_trials,)
+        Class labels.
+    """
+    if class_names is None:
+        class_names = CLASS_NAMES
+
+    n_trials, n_channels, n_samples = X.shape
+    t    = np.arange(n_samples) / sfreq
+    half = n_channels // 2
+
+    # Two channels from each hemisphere — the most informative pair
+    ch_indices = [0, 1, half, half + 1]
+    ch_labels  = [
+        f"ch{0}  (left cortex)",
+        f"ch{1}  (left cortex)",
+        f"ch{half}  (right cortex)",
+        f"ch{half+1}  (right cortex)",
+    ]
+
+    n_cols = len(class_names)
+    n_rows = len(ch_indices)
+    N_SHOW = 3   # number of individual trials to overlay per panel
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(5 * n_cols, 2.5 * n_rows),
+        sharex=True, sharey="row",
+    )
+    if n_rows == 1:
+        axes = axes[np.newaxis, :]
+    if n_cols == 1:
+        axes = axes[:, np.newaxis]
+
+    for col, cname in enumerate(class_names):
+        cls        = col
+        trials_cls = X[y == cls]
+        color      = _COLORS[col]
+
+        for row, (ch_idx, ch_lbl) in enumerate(zip(ch_indices, ch_labels)):
+            ax = axes[row, col]
+
+            # Individual trials — show variability
+            for k in range(min(N_SHOW, len(trials_cls))):
+                ax.plot(t, trials_cls[k, ch_idx, :],
+                        color=color, alpha=0.22, lw=0.8)
+
+            # Class mean — shows the systematic ERD signal
+            ax.plot(t, trials_cls[:, ch_idx, :].mean(axis=0),
+                    color=color, lw=2.0)
+
+            ax.set_xlim(0, t[-1])
+            ax.tick_params(labelsize=7)
+
+            if row == 0:
+                ax.set_title(cname, fontsize=11, fontweight="bold", color=color)
+            if col == 0:
+                ax.set_ylabel(ch_lbl, fontsize=8)
+            if row == n_rows - 1:
+                ax.set_xlabel("Time (s)", fontsize=8)
+
+    fig.suptitle(
+        "Simulated motor imagery EEG — raw time series\n"
+        "Faint = individual trials  |  Bold = class mean  |  "
+        "ERD: suppressed oscillations in contralateral hemisphere",
+        fontsize=10,
+    )
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"    Saved -> {save_path}")
+    plt.close(fig)
+
+
+def plot_itr_comparison(
+    results_df: pd.DataFrame,
+    save_path: Optional[str] = None,
+) -> None:
+    """
+    Grouped bar chart: 3-class vs 4-class ITR per subject (LDA).
+
+    Why this plot matters
+    ---------------------
+    Adding a 4th command class increases the theoretical maximum ITR:
+        3 classes: log₂(3) × 15 decisions/min ≈ 23.8 bits/min
+        4 classes: log₂(4) × 15 decisions/min = 30.0 bits/min  (+26%)
+
+    So even if accuracy drops modestly with more classes, the ITR can
+    still improve because each correct decision carries more information.
+    This is the core argument for expanding command vocabularies in
+    clinical BCI systems — provided accuracy stays above chance (25%).
+
+    The dashed lines show theoretical maxima (100% accuracy).  Real bars
+    show where each subject actually sits given their classification accuracy.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        Must contain: 'subject', 'itr_3cls', 'itr_4cls'.
+    """
+    subjects = [f"S{s:03d}" for s in results_df["subject"].values]
+    itr_3cls = results_df["itr_3cls"].values
+    itr_4cls = results_df["itr_4cls"].values
+
+    x     = np.arange(len(subjects))
+    width = 0.35
+    dec_per_min = 15.0   # 60 s / 4 s trial
+
+    fig, ax = plt.subplots(figsize=(max(6, len(subjects) * 1.5), 5))
+    bars1 = ax.bar(x - width / 2, itr_3cls, width,
+                   label="3-class (rest / left / right)",
+                   color="steelblue", alpha=0.85)
+    bars2 = ax.bar(x + width / 2, itr_4cls, width,
+                   label="4-class (+ feet)",
+                   color="seagreen", alpha=0.85)
+
+    # Theoretical maximum lines
+    ax.axhline(math.log2(3) * dec_per_min, ls="--", color="steelblue",
+               lw=1.0, alpha=0.55, label="3-class max (100 % acc)")
+    ax.axhline(math.log2(4) * dec_per_min, ls="--", color="seagreen",
+               lw=1.0, alpha=0.55, label="4-class max (100 % acc)")
+
+    for bar in bars1:
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.2,
+                f"{bar.get_height():.1f}", ha="center", va="bottom", fontsize=8)
+    for bar in bars2:
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.2,
+                f"{bar.get_height():.1f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xlabel("Subject")
+    ax.set_ylabel("ITR (bits/min)")
+    ax.set_title(
+        "3-class vs 4-class Decoder ITR (LDA, 4 s trials)\n"
+        "4-class theoretical max is +26 % higher — worth adding feet imagery?"
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(subjects)
+    ax.legend(fontsize=8)
 
     plt.tight_layout()
     if save_path:

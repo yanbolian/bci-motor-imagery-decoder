@@ -29,6 +29,7 @@ from bci_decoder.evaluate   import (
     plot_confusion_matrix,
     plot_training_curves,
     plot_band_power_spectrum,
+    plot_raw_signal_example,
     plot_latency_distribution,
 )
 
@@ -57,7 +58,7 @@ def main() -> None:
     banner("Step 1 / 6 — Simulate neural data")
 
     X_raw, y = generate_dataset(
-        n_trials_per_class=120,
+        n_trials_per_class=500,
         noise_std=1.5,   # increase to make decoding harder; try 0.5–3.0
         seed=SEED,
     )
@@ -65,6 +66,13 @@ def main() -> None:
     print(f"  Trials   : {n_trials}  ({n_trials // 3} per class)")
     print(f"  Channels : {n_ch}")
     print(f"  Samples  : {n_samp}  ({n_samp / SFREQ:.1f} s @ {SFREQ} Hz)")
+
+    # Plot example raw brain signals — show ERD as suppressed oscillations
+    # in the contralateral hemisphere during motor imagery.
+    plot_raw_signal_example(
+        X_raw, y, sfreq=SFREQ,
+        save_path=str(OUT_DIR / "raw_signal_example.png"),
+    )
 
     # ── 2. Preprocess ─────────────────────────────────────────────────────────
     banner("Step 2 / 6 — Preprocess (bandpass 1–40 Hz + CAR)")
@@ -118,8 +126,8 @@ def main() -> None:
         X_te_raw,  y_te,
         n_classes=3,
         sfreq=SFREQ,
-        n_epochs=60,
-        batch_size=32,
+        n_epochs=100,
+        batch_size=64,
         lr=5e-4,
     )
 
