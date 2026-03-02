@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Generated outputs — do not commit large PNG/CSV files
+results/
+results_real/
+results_generalization/
+
+# MNE data cache (auto-downloaded PhysioNet EEG — ~35 MB)
+# MNE stores data in ~/mne_data/ by default, but just in case:
+mne_data/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Claude Code workspace settings (local only)
+.claude/
+
+# Secrets / env files
+.env
+*.env
